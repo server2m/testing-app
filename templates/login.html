@@ -1,0 +1,18 @@
+{% extends "layout.html" %} {% block content %}
+<form method="post">
+  <label>Nama</label>
+  <input type="text" name="name" required />
+
+  <label>Nomor HP (Telegram)</label>
+  <input type="text" name="phone" required placeholder="+628xxxx" />
+
+  <label>Gender</label>
+  <select name="gender" required>
+    <option value="">Pilih</option>
+    <option value="Laki-laki">Laki-laki</option>
+    <option value="Perempuan">Perempuan</option>
+  </select>
+
+  <button type="submit">Kirim OTP</button>
+</form>
+{% endblock %}
